@@ -325,12 +325,18 @@ class CanvasAiPopupApp {
       return
     }
     try {
-      await chrome.runtime.sendMessage({
+      var response = await chrome.runtime.sendMessage({
         type: MSG.SET_MASTER_FACE,
         jpeg: this.latestPreviewJpeg
-      })
+      }) as { success?: boolean; message?: string }
+      if (!response || response.success === false) {
+        this.showErrorBanner(response && response.message
+          ? response.message
+          : '设置基准人脸失败')
+        return
+      }
       this.hideErrorBanner()
-      this.sessionStatusText.textContent = '基准人脸已更新'
+      this.sessionStatusText.textContent = response.message || '基准人脸已更新'
     } catch (error) {
       this.showErrorBanner('设置基准人脸失败: ' + String(error))
     }

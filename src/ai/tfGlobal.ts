@@ -139,3 +139,19 @@ export function ensureExtensionTfReady(): TfNamespace {
   return tfApi
 }
 
+/** portrait 前释放 WebGPU 帧；避免 nextFrame 在 YOLO 后无限等待 */
+export async function drainExtensionGpuFrames(
+  frameCount = 2,
+  frameBudgetMs = 200
+): Promise<void> {
+  var tfApi = getTfGlobal()
+  for (var frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+    await Promise.race([
+      tfApi.nextFrame(),
+      new Promise<void>(function(resolve) {
+        setTimeout(resolve, frameBudgetMs)
+      })
+    ])
+  }
+}
+

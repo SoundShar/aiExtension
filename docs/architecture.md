@@ -34,7 +34,7 @@
 | `DETECT_FRAME` | SW → Offscreen | 送入 AI 检测 |
 | `DETECT_RESULT` | Offscreen → SW | 检测结果 |
 | `ANALYSIS_LOG` | SW → Popup | 格式化日志 |
-| `SET_MASTER_FACE` | Popup → SW → Offscreen | 设置换人基准人脸 |
+| `SET_MASTER_FACE` | Popup → SW → Offscreen | 设置换人基准人脸（覆盖内置 `image/123213123.png`） |
 | `SESSION_ERROR` | SW → Popup | 会话错误 |
 | `SESSION_STATE` | SW → Popup | 运行状态 |
 

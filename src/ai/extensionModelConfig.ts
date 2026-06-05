@@ -5,16 +5,19 @@ export const EXT_TF_BACKEND = 'webgpu' as const
 
 export const EXT_PERFORMANCE = Object.assign({}, YOLOV_PERFORMANCE, {
   detectIntervalMs: 1000,
-  /** Offscreen 单帧推理超时；超时后丢弃滞后结果并继续下一帧 */
-  detectFrameTimeoutMs: 45000,
-  // 扩展 detectFrame 固定 mode=object，下列 portrait 调度仅作兜底（不应触发）。
+  /** Offscreen 单 tick 超时（每 tick 仅 object 或 portrait 之一，对齐 aiIdentification 分阶段） */
+  detectFrameTimeoutMs: 12000,
+  // 与 aiIdentification 一致：object/portrait 分 tick 调度
   staggerYoloAndFace: true,
-  bootYoloOnlyDurationMs: 86400000,
-  faceDetectEveryYoloCycles: 9999,
-  changeFaceDetectEveryPortraitCycles: 3,
+  bootYoloOnlyDurationMs: 15000,
+  faceDetectEveryYoloCycles: 3,
+  changeFaceDetectEveryPortraitCycles: 2,
+  faceInputSize: 160,
+  /** object 阶段不再重复跑 face-api fallback，由 portrait tick 负责人脸 */
+  skipYoloFaceFallback: true,
   enableDetectUiLog: true,
-  /** 扩展 Offscreen 内 Worker 加载 chrome-extension:// 模型易 Failed to fetch，默认主线程 */
-  useRecognitionWorker: false,
+  /** 与 Web 一致：Worker 跑 portrait（bitmap→OffscreenCanvas）；失败时降级主线程 */
+  useRecognitionWorker: true,
   recognitionWorkerTimeoutMs: 120000,
   recognitionWorkerScriptUrl:
     typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL

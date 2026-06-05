@@ -37,23 +37,80 @@ function copyDirRecursive(srcDir, destDir) {
 function patchWorkerJs(workerPath) {
   var content = fs.readFileSync(workerPath, 'utf8')
   var changed = false
-  // Worker：统一使用 webpack 产物，确保 webgpu 注册在同一个 tf core 上
-  var workerHeader = [
-    "importScripts('./js/tf-webgpu-bundle.js')",
-    "importScripts('./js/face-api.js')"
+  // face-api 必须先加载并完成 Canvas monkeyPatch，再加载 tf-webgpu 并绑定 tf
+  var workerFaceApiImport = "importScripts('./js/face-api.js')"
+  var workerTfWebgpuImport = "importScripts('./js/tf-webgpu-bundle.js')"
+  var workerFaceApiEnvBootstrap = [
+    '',
+    '// Chrome 扩展 Dedicated Worker 无 window/document，face-api 内置 Pk() 无法识别环境',
+    '// 必须在任何 getEnv / monkeyPatch 之前直接 setEnv，否则 getEnv 会抛 "environment is not defined"',
+    '// OffscreenCanvas 构造函数必须传 (width, height)，不能 new OffscreenCanvas()，否则报 "2 arguments required"',
+    'function createSafeOffscreenCanvas(width, height) {',
+    '  if (arguments.length < 2) {',
+    '    width = width || 1',
+    '    height = height || 1',
+    '  }',
+    '  return new OffscreenCanvas(width, height)',
+    '}',
+    'function initRecognitionWorkerFaceApiEnv() {',
+    "  if (typeof faceapi === 'undefined' || !faceapi.env || typeof faceapi.env.setEnv !== 'function') {",
+    "    throw new Error('Worker: face-api env API 不可用')",
+    '  }',
+    '  faceapi.env.setEnv({',
+    '    Canvas: createSafeOffscreenCanvas,',
+    "    CanvasRenderingContext2D: typeof OffscreenCanvasRenderingContext2D !== 'undefined'",
+    '      ? OffscreenCanvasRenderingContext2D',
+    '      : function () {},',
+    "    Image: typeof ImageBitmap !== 'undefined' ? ImageBitmap : function () {},",
+    "    ImageData: typeof ImageData !== 'undefined' ? ImageData : function () {},",
+    '    Video: function () {},',
+    '    createCanvasElement: function () {',
+    '      return createSafeOffscreenCanvas(1, 1)',
+    '    },',
+    '    createImageElement: function () {',
+    "      throw new Error('createImageElement - not available in recognition worker')",
+    '    },',
+    '    createVideoElement: function () {',
+    "      throw new Error('createVideoElement - not available in recognition worker')",
+    '    },',
+    "    fetch: typeof fetch !== 'undefined' ? fetch : function () {",
+    "      throw new Error('fetch - not available in recognition worker')",
+    '    },',
+    '    readFile: function () {',
+    "      throw new Error('readFile - not available in recognition worker')",
+    '    }',
+    '  })',
+    '}',
+    'initRecognitionWorkerFaceApiEnv()',
+    ''
   ].join('\n')
 
   var workerImportBlock = /importScripts\('\.\/js\/tf\.min\.js'\)\s*\n(?:importScripts\('\.\/js\/tf-backend-webgpu\.min\.js'\)\s*\n)?importScripts\('\.\/js\/face-api\.js'\)/
   if (workerImportBlock.test(content)) {
-    content = content.replace(workerImportBlock, workerHeader)
+    content = content.replace(workerImportBlock, workerFaceApiImport)
     changed = true
-  } else if (
-    content.indexOf("importScripts('./js/tf-webgpu-bundle.js')") < 0 &&
-    content.indexOf("importScripts('./js/face-api.js')") >= 0
-  ) {
+  }
+
+  if (content.indexOf("importScripts('./js/tf-webgpu-bundle.js')\nimportScripts('./js/face-api.js')") >= 0) {
     content = content.replace(
-      /importScripts\('\.\/js\/face-api\.js'\)/,
-      workerHeader
+      "importScripts('./js/tf-webgpu-bundle.js')\nimportScripts('./js/face-api.js')",
+      workerFaceApiImport
+    )
+    changed = true
+  }
+
+  if (content.indexOf(workerTfWebgpuImport) < 0 && content.indexOf(workerFaceApiImport) >= 0) {
+    content = content.replace(
+      /importScripts\('\.\/js\/face-api\.js'\)\s*\n/,
+      workerFaceApiImport + '\n'
+    )
+    changed = true
+  }
+
+  if (content.indexOf('function initRecognitionWorkerFaceApiEnv') < 0 && content.indexOf(workerFaceApiImport) >= 0) {
+    content = content.replace(
+      /importScripts\('\.\/js\/face-api\.js'\)\s*\n/,
+      workerFaceApiImport + workerFaceApiEnvBootstrap
     )
     changed = true
   }
@@ -95,17 +152,87 @@ function patchWorkerJs(workerPath) {
     '}',
     'var tf = resolveWorkerTf()',
     'registerWorkerExtensionTfIo()',
+    'faceapi.env.monkeyPatch({ tf: tf })',
     ''
   ].join('\n')
 
+  var workerTfBootstrap = [
+    workerTfWebgpuImport,
+    '',
+    workerTfExtras,
+    workerTfResolve
+  ].join('\n')
+
+  if (content.indexOf('faceapi.env.monkeyPatch({ tf: tf })') < 0) {
+    if (content.indexOf('function resolveWorkerTf') >= 0) {
+      content = content.replace(
+        /registerWorkerExtensionTfIo\(\)\s*\n/,
+        "registerWorkerExtensionTfIo()\nfaceapi.env.monkeyPatch({ tf: tf })\n"
+      )
+      changed = true
+    }
+  }
+
+  if (content.indexOf(workerTfWebgpuImport) < 0) {
+    var canvasMonkeyPatchAnchor =
+      /faceapi\.env\.monkeyPatch\(\{\r?\n  Canvas: (?:OffscreenCanvas|createSafeOffscreenCanvas)[\s\S]*?\}\)\s*\n/
+    if (canvasMonkeyPatchAnchor.test(content)) {
+      content = content.replace(canvasMonkeyPatchAnchor, function(match) {
+        return match + '\n' + workerTfBootstrap
+      })
+      changed = true
+    }
+  }
+
+  if (content.indexOf('var tf = faceapi.tf') >= 0) {
+    content = content.replace(/\r?\nvar tf = faceapi\.tf\r?\n/, '\n')
+    changed = true
+  }
+
+  if (content.indexOf('tf: tf,\n  Canvas: OffscreenCanvas') >= 0) {
+    content = content.replace(
+      /faceapi\.env\.monkeyPatch\(\{\r?\n  tf: tf,\r?\n  Canvas: OffscreenCanvas/,
+      'faceapi.env.monkeyPatch({\n  Canvas: OffscreenCanvas'
+    )
+    changed = true
+  }
+
+  if (content.indexOf('Canvas: OffscreenCanvas') >= 0) {
+    content = content.replace(/Canvas: OffscreenCanvas/g, 'Canvas: createSafeOffscreenCanvas')
+    changed = true
+  }
+
+  if (content.indexOf('return new OffscreenCanvas(1, 1)') >= 0) {
+    content = content.replace(/return new OffscreenCanvas\(1, 1\)/g, 'return createSafeOffscreenCanvas(1, 1)')
+    changed = true
+  }
+
   var legacyTfLine = /var tf = typeof self\.tf !== 'undefined' \? self\.tf : faceapi\.tf\s*\n/
   if (legacyTfLine.test(content)) {
-    content = content.replace(legacyTfLine, workerTfResolve)
+    content = content.replace(legacyTfLine, '')
     changed = true
-  } else if (content.indexOf('function resolveWorkerTf') < 0 && content.indexOf('var tf = resolveWorkerTf()') < 0) {
+  }
+
+  if (content.indexOf('function resolveWorkerTf') >= 0 && content.indexOf(workerTfWebgpuImport) < 0) {
     content = content.replace(
-      /importScripts\('\.\/js\/face-api\.js'\)\s*\n/,
-      "importScripts('./js/face-api.js')\n\n" + workerTfResolve
+      /function extensionWorkerFetch/,
+      workerTfWebgpuImport + '\n\nfunction extensionWorkerFetch'
+    )
+    changed = true
+  }
+
+  if (
+    content.indexOf('function resolveWorkerTf') >= 0 &&
+    content.indexOf(workerTfWebgpuImport) >= 0 &&
+    content.indexOf('function extensionWorkerFetch') >= 0 &&
+    content.indexOf(workerTfWebgpuImport) > content.indexOf('function extensionWorkerFetch')
+  ) {
+    content = content.replace(workerTfBootstrap, '')
+    content = content.replace(
+      /faceapi\.env\.monkeyPatch\(\{\r?\n  Canvas: (?:OffscreenCanvas|createSafeOffscreenCanvas)[\s\S]*?\}\)\s*\n/,
+      function(match) {
+        return match + '\n' + workerTfBootstrap
+      }
     )
     changed = true
   }
@@ -156,6 +283,68 @@ function patchWorkerJs(workerPath) {
     "  }",
     "}"
   ].join('\n')
+
+  var legacyBase64ToCanvasPattern = /async function base64ToCanvas\(imageBase64\) \{[\s\S]*?\n\}\s*\n/
+  var newBase64ToFaceTensor = [
+    'async function base64ToFaceTensor(imageBase64) {',
+    '  var response = await fetch(imageBase64)',
+    '  var blob = await response.blob()',
+    '  var bitmap = await createImageBitmap(blob)',
+    '  var canvas = bitmapToCanvas(bitmap)',
+    '  var tensor = tf.browser.fromPixels(canvas)',
+    '  closeBitmap(bitmap)',
+    '  return tensor',
+    '}',
+    ''
+  ].join('\n')
+  if (legacyBase64ToCanvasPattern.test(content)) {
+    content = content.replace(legacyBase64ToCanvasPattern, newBase64ToFaceTensor)
+    changed = true
+  }
+
+  if (content.indexOf('detectAllFaces(canvas, options)') >= 0) {
+    content = content.replace(
+      /var canvas = bitmapToCanvas\(params\.bitmap\)\s*\n\s*var options = getFaceDetectorOptions\(\)\s*\n\s*var needDescriptors = Boolean\(params\.enableChangeFace && params\.runChangeFaceDescriptor && masterDescriptor\)\s*\n\s*var detections = \[\]\s*\n\s*\n\s*try \{\s*\n\s*var landmarkChain = faceapi\.detectAllFaces\(canvas, options\)\.withFaceLandmarks\(\)\s*\n\s*detections = needDescriptors \? await landmarkChain\.withFaceDescriptors\(\) : await landmarkChain\s*\n\s*\} catch \(faceError\) \{\s*\n\s*console\.warn\('\[recognition-worker\] face detect failed', faceError\)\s*\n\s*return flags\s*\n\s*\}/,
+      [
+        'var canvas = bitmapToCanvas(params.bitmap)',
+        '  var faceTensor = tf.browser.fromPixels(canvas)',
+        '  var options = getFaceDetectorOptions()',
+        '  var needDescriptors = Boolean(params.enableChangeFace && params.runChangeFaceDescriptor && masterDescriptor)',
+        '  var detections = []',
+        '',
+        '  try {',
+        '    var landmarkChain = faceapi.detectAllFaces(faceTensor, options).withFaceLandmarks()',
+        '    detections = needDescriptors ? await landmarkChain.withFaceDescriptors() : await landmarkChain',
+        '  } catch (faceError) {',
+        "    console.warn('[recognition-worker] face detect failed', faceError)",
+        '    return flags',
+        '  } finally {',
+        '    tf.dispose(faceTensor)',
+        '  }'
+      ].join('\n')
+    )
+    changed = true
+  }
+
+  if (content.indexOf('detectSingleFace(canvas, options)') >= 0 || content.indexOf('base64ToCanvas(data.imageBase64)') >= 0) {
+    content = content.replace(
+      /var canvas = await base64ToCanvas\(data\.imageBase64\)\s*\n\s*var options = getFaceDetectorOptions\(\)\s*\n\s*var singleResult = await faceapi\s*\n\s*\.detectSingleFace\(canvas, options\)\s*\n\s*\.withFaceLandmarks\(\)\s*\n\s*\.withFaceDescriptor\(\)/,
+      [
+        'var faceTensor = await base64ToFaceTensor(data.imageBase64)',
+        '      var options = getFaceDetectorOptions()',
+        '      var singleResult = null',
+        '      try {',
+        '        singleResult = await faceapi',
+        '          .detectSingleFace(faceTensor, options)',
+        '          .withFaceLandmarks()',
+        '          .withFaceDescriptor()',
+        '      } finally {',
+        '        tf.dispose(faceTensor)',
+        '      }'
+      ].join('\n')
+    )
+    changed = true
+  }
 
   var detectFullPattern = /async function handleDetectFull\(data\) \{[\s\S]*?\n\}\s*\nfunction handleDispose/
   if (detectFullPattern.test(content)) {

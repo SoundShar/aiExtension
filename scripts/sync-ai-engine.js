@@ -127,7 +127,7 @@ function patchModelTs(content) {
       '  getExtensionFaceModelsBaseUrl,',
       '  getExtensionModelsBaseUrl',
       "} from '../extensionAssets'",
-      "import { getFaceApiGlobal } from '../faceApiGlobal'",
+      "import { bindFaceApiToExtensionTf, getFaceApiGlobal } from '../faceApiGlobal'",
       "import { ensureExtensionTfReady, getTfGlobal } from '../tfGlobal'",
       ''
     ].join('\n')
@@ -141,7 +141,7 @@ function patchModelTs(content) {
       '  getExtensionFaceModelsBaseUrl,',
       '  getExtensionModelsBaseUrl',
       "} from '../extensionAssets'",
-      "import { getFaceApiGlobal } from '../faceApiGlobal'",
+      "import { bindFaceApiToExtensionTf, getFaceApiGlobal } from '../faceApiGlobal'",
       "import { ensureExtensionTfReady, getTfGlobal } from '../tfGlobal'",
       ''
     ].join('\n')
@@ -327,6 +327,7 @@ function patchModelTs(content) {
       'async ensureFaceModels(): Promise<void> {',
       '    if (faceModelsReady) return',
       '    await initWebGpuBackend()',
+      '    bindFaceApiToExtensionTf()',
       '    const faceApi = getFaceApiGlobal()',
       '    const baseUrl = getExtensionFaceModelsBaseUrl()',
       '    await Promise.all([',
@@ -396,7 +397,7 @@ function patchInferenceRunner(content) {
 
   content = content.replace(
     /from '\.\.\/model'\r?\nimport type \{/,
-    "from '../model'\nimport { getTfGlobal } from '../../tfGlobal'\nimport type * as faceApis from '@vladmandic/face-api'\nimport type {"
+    "from '../model'\nimport { createOffscreenFaceInput } from '../../faceApiGlobal'\nimport { drainExtensionGpuFrames, getTfGlobal } from '../../tfGlobal'\nimport type * as faceApis from '@vladmandic/face-api'\nimport type {"
   )
 
   content = content.replace(/faceApis\.detectSingleFace/g, 'getFaceApiGlobal().detectSingleFace')
@@ -468,15 +469,189 @@ function patchInferenceRunner(content) {
   content = content.replace(
     /async runFaceAndPortrait\(\): Promise<Partial<DetectionResultFlags>> \{\r?\n    if \(!this\.videoContext\) \{\r?\n      return \{\}\r?\n    \}\r?\n\r?\n    let faceFlags: Partial<DetectionResultFlags> = \{\}/,
     [
-      'async runFaceAndPortrait(): Promise<Partial<DetectionResultFlags>> {',
+      'async runFaceAndPortrait(options?: { runChangeFaceDescriptor?: boolean }): Promise<Partial<DetectionResultFlags>> {',
       '    if (!this.videoContext) {',
       '      return {}',
       '    }',
       '',
       '    const tf = getTfGlobal()',
+      '    await tf.nextFrame()',
       '    let faceFlags: Partial<DetectionResultFlags> = {}'
     ].join('\n')
   )
+
+  if (content.indexOf('await tf.nextFrame()') < 0 && content.indexOf('async runFaceAndPortrait(options') >= 0) {
+    content = content.replace(
+      /async runFaceAndPortrait\(options\?: \{ runChangeFaceDescriptor\?: boolean \}\): Promise<Partial<DetectionResultFlags>> \{\r?\n    if \(!this\.videoContext\) \{\r?\n      return \{\}\r?\n    \}\r?\n\r?\n    const tf = getTfGlobal\(\)\r?\n    let faceFlags/,
+      [
+        'async runFaceAndPortrait(options?: { runChangeFaceDescriptor?: boolean }): Promise<Partial<DetectionResultFlags>> {',
+        '    if (!this.videoContext) {',
+        '      return {}',
+        '    }',
+        '',
+        '    const tf = getTfGlobal()',
+        '    await tf.nextFrame()',
+        '    let faceFlags'
+      ].join('\n')
+    )
+  }
+
+  if (content.indexOf('performanceConfig?: typeof YOLOV_PERFORMANCE') < 0) {
+    content = content.replace(
+      /type InferenceRunnerOptions = \{\r?\n  yoloModelService: YoloModelService\r?\n  detectionConfig: DetectionDataMap\r?\n  onYoloError\?: \(message: string\) => void\r?\n\}/,
+      [
+        'type InferenceRunnerOptions = {',
+        '  yoloModelService: YoloModelService',
+        '  detectionConfig: DetectionDataMap',
+        '  onYoloError?: (message: string) => void',
+        '  performanceConfig?: typeof YOLOV_PERFORMANCE',
+        '}'
+      ].join('\n')
+    )
+    content = content.replace(
+      /  private selectedValue: \[string, number, number\] = \[\r?\n    YOLOV_PERFORMANCE\.faceDetectorType,\r?\n    YOLOV_PERFORMANCE\.faceScoreThreshold,\r?\n    YOLOV_PERFORMANCE\.faceInputSize\r?\n  \]/,
+      [
+        '  private performanceConfig: typeof YOLOV_PERFORMANCE',
+        '  private selectedValue: [string, number, number]',
+        '',
+        '  private applyFacePerformanceConfig(config: typeof YOLOV_PERFORMANCE): void {',
+        '    this.performanceConfig = config',
+        '    this.selectedValue = [',
+        '      config.faceDetectorType,',
+        '      config.faceScoreThreshold,',
+        '      config.faceInputSize',
+        '    ]',
+        '  }'
+      ].join('\n')
+    )
+    content = content.replace(
+      /  constructor\(options: InferenceRunnerOptions\) \{\r?\n    this\.yoloModelService = options\.yoloModelService\r?\n    this\.detectionConfig = options\.detectionConfig\r?\n    this\.onYoloError = options\.onYoloError\r?\n  \}/,
+      [
+        '  constructor(options: InferenceRunnerOptions) {',
+        '    this.yoloModelService = options.yoloModelService',
+        '    this.detectionConfig = options.detectionConfig',
+        '    this.onYoloError = options.onYoloError',
+        '    this.applyFacePerformanceConfig(options.performanceConfig || YOLOV_PERFORMANCE)',
+        '  }'
+      ].join('\n')
+    )
+  }
+
+  if (content.indexOf('skipYoloFaceFallback') < 0) {
+    content = content.replace(
+      /    if \(flags\.not_person\) \{\r?\n      const faceFallback = await this\.detectFacePresenceFallback/,
+      [
+        '    if (flags.not_person && !(this.performanceConfig as any).skipYoloFaceFallback) {',
+        '      const faceFallback = await this.detectFacePresenceFallback'
+      ].join('\n')
+    )
+  }
+
+  if (content.indexOf('createOffscreenFaceInput(inferenceCanvas)') < 0) {
+    content = content.replace(
+      /const singleFaceTask = getFaceApiGlobal\(\)\.detectSingleFace\(imgDom, options\)/,
+      [
+        'const faceInputCanvas = createOffscreenFaceInput(imgDom)',
+        '      const singleFaceTask = getFaceApiGlobal().detectSingleFace(faceInputCanvas, options)'
+      ].join('\n')
+    )
+    content = content.replace(
+      /const detections = await getFaceApiGlobal\(\)\.detectAllFaces\(inferenceCanvas, options\)/g,
+      [
+        'const faceInputCanvas = createOffscreenFaceInput(inferenceCanvas)',
+        '      const detections = await getFaceApiGlobal().detectAllFaces(faceInputCanvas, options)'
+      ].join('\n')
+    )
+    content = content.replace(
+      /const allFacesTask = getFaceApiGlobal\(\)\.detectAllFaces\(inferenceCanvas, options\)/,
+      [
+        "      console.info('[canvas-ai][portrait] face-api detect start')",
+        '      const faceInputCanvas = createOffscreenFaceInput(inferenceCanvas)',
+        '      const allFacesTask = getFaceApiGlobal().detectAllFaces(faceInputCanvas, options)'
+      ].join('\n')
+    )
+    content = content.replace(
+      /      \} else \{\r?\n        detections = await facesWithLandmarks\r?\n      \}\r?\n    \} catch \(error\) \{\r?\n      console\.warn\('\[ai-inference\] face detect failed', error\)/,
+      [
+        '      } else {',
+        '        detections = await facesWithLandmarks',
+        '      }',
+        "      console.info('[canvas-ai][portrait] face-api detect done count=' + detections.length)",
+        '    } catch (error) {',
+        "      console.warn('[ai-inference] face detect failed', error)"
+      ].join('\n')
+    )
+  }
+
+  if (content.indexOf('drainExtensionGpuFrames') < 0) {
+    content = content.replace(
+      "import { getTfGlobal } from '../../tfGlobal'",
+      "import { drainExtensionGpuFrames, getTfGlobal } from '../../tfGlobal'"
+    )
+  }
+
+  if (content.indexOf('[canvas-ai][portrait] face pipeline enter') < 0 && content.indexOf('async runFaceAndPortrait(options') >= 0) {
+    content = content.replace(
+      /const tf = getTfGlobal\(\)\r?\n    await tf\.nextFrame\(\)\r?\n    await tf\.nextFrame\(\)\r?\n    let faceFlags/,
+      [
+        "    console.info(",
+        "      '[canvas-ai][portrait] face pipeline enter' +",
+        "      ' isNoBody=' + this.isNoBody +",
+        "      ' isMultipleNoBody=' + this.isMultipleNoBody",
+        '    )',
+        '    await drainExtensionGpuFrames(2, 200)',
+        '    let faceFlags'
+      ].join('\n')
+    )
+    content = content.replace(
+      /await drainExtensionGpuFrames\(2, 200\)\r?\n    let faceFlags[\s\S]*?await tf\.nextFrame\(\)/,
+      [
+        'await drainExtensionGpuFrames(2, 200)',
+        '    let faceFlags: Partial<DetectionResultFlags> = {}',
+        '    if (!this.isNoBody && !this.isMultipleNoBody) {',
+        '      faceFlags = await this.runFacePipeline(options?.runChangeFaceDescriptor !== false)',
+        '      await drainExtensionGpuFrames(1, 200)'
+      ].join('\n')
+    )
+  }
+
+  if (content.indexOf('await tf.nextFrame()\n    await tf.nextFrame()') < 0 && content.indexOf('async runFaceAndPortrait(options') >= 0) {
+    content = content.replace(
+      /const tf = getTfGlobal\(\)\r?\n    await tf\.nextFrame\(\)\r?\n    let faceFlags/,
+      [
+        'const tf = getTfGlobal()',
+        '    await tf.nextFrame()',
+        '    await tf.nextFrame()',
+        '    let faceFlags'
+      ].join('\n')
+    )
+  }
+
+  if (content.indexOf('runChangeFaceDescriptor = true') < 0) {
+    content = content.replace(
+      /  private async runFacePipeline\(\): Promise<Partial<DetectionResultFlags>> \{/,
+      '  private async runFacePipeline(runChangeFaceDescriptor = true): Promise<Partial<DetectionResultFlags>> {'
+    )
+    content = content.replace(
+      /    const needSwapDescriptors =\r?\n      changePersonPC\.switch &&\r?\n      Boolean\(this\.masterFaceDataUrl\) &&\r?\n      this\.facesList\.length > 0/,
+      [
+        '    const needSwapDescriptors =',
+        '      runChangeFaceDescriptor &&',
+        '      changePersonPC.switch &&',
+        '      Boolean(this.masterFaceDataUrl) &&',
+        '      this.facesList.length > 0'
+      ].join('\n')
+    )
+    content = content.replace(
+      /const tf = getTfGlobal\(\)\r?\n    let faceFlags: Partial<DetectionResultFlags> = \{\}\r?\n    if \(!this\.isNoBody && !this\.isMultipleNoBody\) \{\r?\n      faceFlags = await this\.runFacePipeline\(\)/,
+      [
+        'const tf = getTfGlobal()',
+        '    let faceFlags: Partial<DetectionResultFlags> = {}',
+        '    if (!this.isNoBody && !this.isMultipleNoBody) {',
+        '      faceFlags = await this.runFacePipeline(options?.runChangeFaceDescriptor !== false)'
+      ].join('\n')
+    )
+  }
 
   return content
 }
@@ -491,13 +666,29 @@ function patchRecognitionWorkerClient(content) {
     'const getFaceModelsBaseUrl = (): string => getExtensionFaceModelsBaseUrl()'
   ].join('\n')
 
-  return content.replace(
+  content = content.replace(
     /const getFaceModelsBaseUrl = \(\): string => \{[\s\S]*?\}\r?\n\r?\n/,
     faceBasePatch + '\n\n'
   ).replace(
     /const getFaceModelsBaseUrl = \(\): string => `\$\{location\.origin\}\/models\/face-api`/,
     faceBasePatch
   )
+
+  if (content.indexOf('event.message, event.filename') < 0) {
+    content = content.replace(
+      /worker\.onerror = \(\) => \{\r?\n        failInit\('Recognition Worker 脚本错误'\)\r?\n      \}/,
+      [
+        'worker.onerror = (event: ErrorEvent) => {',
+        '        var detail = [event.message, event.filename, String(event.lineno || "")]',
+        '          .filter(Boolean)',
+        '          .join(" ")',
+        '        failInit("Recognition Worker 脚本错误: " + (detail || "unknown"))',
+        '      }'
+      ].join('\n')
+    )
+  }
+
+  return content
 }
 
 function patchYksAiProctorEngineBootstrap(content) {
@@ -651,6 +842,71 @@ function patchYksAiProctorEngine(content) {
         '  }',
         '',
         '  setMasterFace(dataUrl: string | null): void {'
+      ].join('\n')
+    )
+  }
+
+  if (content.indexOf('reloadMasterFaceDescriptor(): Promise<boolean>') < 0) {
+    content = content.replace(
+      /  async reloadMasterFaceDescriptor\(\): Promise<void> \{\r?\n    const resolved = this\.masterFaceBase64 \|\| this\.masterFaceUrl\r?\n    this\.inferenceRunner\.setMasterFace\(resolved\)\r?\n    if \(this\.recognitionClient\?\.isActive\) \{\r?\n      await this\.syncMasterFaceToRecognitionWorker\(\)\r?\n      return\r?\n    \}\r?\n    if \(!this\.initialized\) \{\r?\n      return\r?\n    \}\r?\n    if \(this\.checkStatus\.changePersonPC && resolved\) \{\r?\n      await this\.inferenceRunner\.entryFaces\(\)\r?\n    \}\r?\n  \}/,
+      [
+        '  async reloadMasterFaceDescriptor(): Promise<boolean> {',
+        '    const resolved = this.masterFaceBase64 || this.masterFaceUrl',
+        '    this.inferenceRunner.setMasterFace(resolved)',
+        '    if (this.recognitionClient?.isActive) {',
+        '      await this.syncMasterFaceToRecognitionWorker()',
+        '      return this.inferenceRunner.hasMasterFace',
+        '    }',
+        '    if (!this.initialized) {',
+        '      return false',
+        '    }',
+        '    if (this.checkStatus.changePersonPC && resolved) {',
+        '      return this.inferenceRunner.entryFaces()',
+        '    }',
+        '    return false',
+        '  }'
+      ].join('\n')
+    )
+  }
+
+  if (content.indexOf('performanceConfig: this.performanceConfig') < 0) {
+    content = content.replace(
+      /    this\.inferenceRunner = new LocalInferenceRunner\(\{\r?\n      yoloModelService: this\.yoloModelService,\r?\n      detectionConfig: this\.detectionConfig,\r?\n      onYoloError: \(message\) => this\.onLog\?\.\('YOLO', message\)\r?\n    \}\)/,
+      [
+        '    this.inferenceRunner = new LocalInferenceRunner({',
+        '      yoloModelService: this.yoloModelService,',
+        '      detectionConfig: this.detectionConfig,',
+        "      onYoloError: (message) => this.onLog?.('YOLO', message),",
+        '      performanceConfig: this.performanceConfig',
+        '    })'
+      ].join('\n')
+    )
+  }
+
+  if (content.indexOf("if (phase === 'face') {\n        if (this.lastYoloFlags)") < 0) {
+    content = content.replace(
+      /if \(phase === 'face'\) \{\r?\n        const facePortraitFlags = await this\.inferenceRunner\.runFaceAndPortrait\(\)/,
+      [
+        "if (phase === 'face') {",
+        '        if (this.lastYoloFlags) {',
+        '          this.inferenceRunner.applyYoloDetectionState(this.normalizeYoloFlags(this.lastYoloFlags))',
+        '        }',
+        '        const facePortraitFlags = await this.inferenceRunner.runFaceAndPortrait({',
+        '          runChangeFaceDescriptor: this.shouldRunChangeFaceDescriptor()',
+        '        })'
+      ].join('\n')
+    )
+  }
+
+  if (content.indexOf('this.closeBitmap(bitmap)\n    return {\n      success: response.success,\n      phase: \'portrait\'') < 0) {
+    content = content.replace(
+      /    \} else \{\r?\n      this\.closeBitmap\(bitmap\)\r?\n    \}\r?\n\r?\n    await this\.ensureMainThreadModelsForFallback\(\)\r?\n    const response = await this\.setBase64\(\{ image_data: imageData, phase: 'face' \}\)/,
+      [
+        '    }',
+        '',
+        '    await this.ensureMainThreadModelsForFallback()',
+        "    const response = await this.setBase64({ image_data: imageData, phase: 'face' })",
+        '    this.closeBitmap(bitmap)'
       ].join('\n')
     )
   }

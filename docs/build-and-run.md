@@ -34,7 +34,7 @@ yarn build
 2. 点击扩展图标打开 Popup
 3. 点击「开始分析」
 4. 观察 JPEG 预览与下方分析日志
-5. 可选：点击「设当前帧为基准人脸」启用换人检测
+5. 换人检测默认使用内置基准人脸 `public/image/123213123.png`；也可点击「设当前帧为基准人脸」覆盖
 
 ## 模型体积与按需复制
 
@@ -110,7 +110,9 @@ Offscreen 加载顺序：`js/tf-csp-prelude.js` → `js/tf-webgpu-bundle.js` →
 - Offscreen **只保留最新一帧**，慢帧不会无限排队
 - 单帧 **45s** 超时（`detectFrameTimeoutMs`），超时立即回 `DETECT_RESULT`，滞后完成的推理结果丢弃
 - Background 超时 **50s**，略长于 Offscreen，避免双端竞态
-- 扩展 `detectFrame` 固定 **`mode=object`**（仅 YOLO），不进入 portrait（face-api），避免约 60s 后 `bootYoloOnlyDurationMs` 结束触发 portrait 挂起 WebGPU
+- 扩展与 aiIdentification 一致：**`mode=auto` 分 tick**（每 tick 仅 object 或 portrait 之一）；每 3 次 object 后 1 次 portrait（低头/转头/换人/越界）；单 tick 超时 **12s**
+- **portrait 超时（phase=portrait）**：扩展已启用 `useRecognitionWorker: true`（与 Web 一致，Worker 内 `bitmap→OffscreenCanvas→face-api`）。**Worker 脚本须先 `importScripts face-api.js`，再 `faceapi.env.setEnv(...)`（扩展 Dedicated Worker 无 `window`/`document`，`Pk()` 返回 null，`getEnv` 会抛错，必须在任何 `getEnv`/`monkeyPatch` 之前直接 `setEnv`）。`Canvas` 不能直接用 `OffscreenCanvas`（其构造函数必须传 width/height），需用带默认参数的 wrapper（`createSafeOffscreenCanvas`），且后续所有 `monkeyPatch` 也必须保持 `Canvas: createSafeOffscreenCanvas`，否则会被覆盖回零参数构造并再次报 `Failed to construct 'OffscreenCanvas': 2 arguments required`**。然后加载 `tf-webgpu-bundle.js` 并 `monkeyPatch({ tf })`。主线程降级时须 `createOffscreenFaceInput()`。成功日志：`[canvas-ai][MODEL] Recognition Worker 已启用`
+- 换人默认基准图为 `image/123213123.png`，启动分析后 Offscreen 自动 `entryFaces()`；可用 Popup 按钮覆盖为当前预览帧
 
 Offscreen 日志应出现 `开始检测 tabId=… phase=object|portrait`；进入 portrait 时有 `[canvas-ai][portrait] 开始 portrait 检测`。
 

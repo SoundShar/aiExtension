@@ -1,6 +1,7 @@
 import { CanvasProctorEngine } from '../ai/canvasProctorEngine'
 import { EXT_PERFORMANCE } from '../ai/extensionModelConfig'
 import { installExtensionGlobalFetch } from '../ai/extensionAssets'
+import { bindFaceApiToExtensionTf } from '../ai/faceApiGlobal'
 import { assertExtensionTfCoreReady, ensureExtensionTfReady } from '../ai/tfGlobal'
 import {
   buildAnalysisLogText,
@@ -16,7 +17,7 @@ var latestPendingFrame: DetectFramePayload | null = null
 var isDrainRunning = false
 var modelsReady = false
 var modelsWarmupPromise: Promise<void> | null = null
-var DETECT_FRAME_TIMEOUT_MS = EXT_PERFORMANCE.detectFrameTimeoutMs || 45000
+var DETECT_FRAME_TIMEOUT_MS = EXT_PERFORMANCE.detectFrameTimeoutMs || 12000
 
 var emptyDetectFlags: DetectResultPayload['flags'] = {
   not_person: false,
@@ -222,9 +223,14 @@ chrome.runtime.onMessage.addListener(function(message, _sender, sendResponse) {
   }
 
   if (message.type === MSG.SET_MASTER_FACE && message.jpeg) {
-    proctorEngine.setMasterFace(message.jpeg)
-    sendEngineStatus(true, '基准人脸已更新')
-    sendResponse({ success: true })
+    proctorEngine.setMasterFace(message.jpeg).then(function(result) {
+      sendEngineStatus(result.success, result.message)
+      sendResponse({ success: result.success, message: result.message })
+    }).catch(function(error) {
+      var errorMessage = (error as Error).message || String(error)
+      sendEngineStatus(false, '基准人脸设置失败: ' + errorMessage)
+      sendResponse({ success: false, message: errorMessage })
+    })
     return true
   }
 
@@ -235,6 +241,7 @@ try {
   installExtensionGlobalFetch()
   assertExtensionTfCoreReady()
   ensureExtensionTfReady()
+  bindFaceApiToExtensionTf()
   console.info('[canvas-ai][offscreen] TensorFlow 与扩展 fetch 已就绪')
   ensureModelsReady().catch(function() {
     // 预加载失败时首帧会再次尝试并输出错误
