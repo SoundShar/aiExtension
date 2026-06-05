@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Canvas AI 分析</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="canvas-ai-popup">
+      <header class="canvas-ai-popup-header">
+        <h1 class="canvas-ai-popup-title">Canvas AI 分析</h1>
+        <p id="sessionStatusText" class="status-bar-text">未启动</p>
+      </header>
+
+      <section class="action-panel">
+        <button id="startSessionBtn" type="button" class="action-btn action-btn-start">开始分析</button>
+        <button id="stopSessionBtn" type="button" class="action-btn action-btn-stop" disabled>停止分析</button>
+        <button id="setMasterFaceBtn" type="button" class="action-btn action-btn-master" disabled>设当前帧为基准人脸</button>
+      </section>
+
+      <section class="preview-panel preview-panel-pinned">
+        <img id="previewImageEl" class="preview-image" alt="canvas 预览" />
+        <p id="previewMetaText" class="preview-meta-text">等待抓取...</p>
+        <p id="latestResultText" class="latest-result-text">最新结果：等待分析...</p>
+      </section>
+
+      <section class="log-panel">
+        <h2 class="log-panel-title">分析日志</h2>
+        <ul id="analysisLogList" class="log-list"></ul>
+      </section>
+
+      <p id="errorBannerText" class="error-banner-text" hidden></p>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+public/models/
+public/js/
+public/worker.js
+src/ai/yolo/
+src/ai/proctor/
