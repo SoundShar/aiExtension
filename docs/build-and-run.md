@@ -110,7 +110,7 @@ Offscreen 加载顺序：`js/tf-csp-prelude.js` → `js/tf-webgpu-bundle.js` →
 - Offscreen **只保留最新一帧**，慢帧不会无限排队
 - 单帧 **45s** 超时（`detectFrameTimeoutMs`），超时立即回 `DETECT_RESULT`，滞后完成的推理结果丢弃
 - Background 超时 **50s**，略长于 Offscreen，避免双端竞态
-- 扩展与 aiIdentification 一致：**`mode=auto` 分 tick**（每 tick 仅 object 或 portrait 之一）；每 3 次 object 后 1 次 portrait（低头/转头/换人/越界）；单 tick 超时 **12s**
+- 扩展 **`mode=auto` 同 tick 全量**（`staggerYoloAndFace: false`）：启动后前 **15s** 仅 YOLO；之后每 tick **同时跑 YOLO + face**（Worker `detect-full`）；单 tick 超时 **12s**
 - **portrait 超时（phase=portrait）**：扩展已启用 `useRecognitionWorker: true`（与 Web 一致，Worker 内 `bitmap→OffscreenCanvas→face-api`）。**Worker 脚本须先 `importScripts face-api.js`，再 `faceapi.env.setEnv(...)`（扩展 Dedicated Worker 无 `window`/`document`，`Pk()` 返回 null，`getEnv` 会抛错，必须在任何 `getEnv`/`monkeyPatch` 之前直接 `setEnv`）。`Canvas` 不能直接用 `OffscreenCanvas`（其构造函数必须传 width/height），需用带默认参数的 wrapper（`createSafeOffscreenCanvas`），且后续所有 `monkeyPatch` 也必须保持 `Canvas: createSafeOffscreenCanvas`，否则会被覆盖回零参数构造并再次报 `Failed to construct 'OffscreenCanvas': 2 arguments required`**。然后加载 `tf-webgpu-bundle.js` 并 `monkeyPatch({ tf })`。主线程降级时须 `createOffscreenFaceInput()`。成功日志：`[canvas-ai][MODEL] Recognition Worker 已启用`
 - 换人默认基准图为 `image/123213123.png`，启动分析后 Offscreen 自动 `entryFaces()`；可用 Popup 按钮覆盖为当前预览帧
 

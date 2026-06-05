@@ -807,6 +807,29 @@ function patchYksAiProctorEngineRecognitionConfig(content) {
   )
 }
 
+function patchYksAiProctorEngineDetectFrameBoot(content) {
+  var bootFullDetectBlock = [
+    '    if (!this.performanceConfig.staggerYoloAndFace && mode === \'auto\') {',
+    '      if (Date.now() - this.proctorBootStartedAt < this.performanceConfig.bootYoloOnlyDurationMs) {',
+    '        return this.detectObjectFrame(input.bitmap, imageData)',
+    '      }',
+    '      return this.detectFullFrame(input.bitmap, imageData)',
+    '    }'
+  ].join('\n')
+
+  if (content.indexOf('return this.detectObjectFrame(input.bitmap, imageData)\r\n      }\r\n      return this.detectFullFrame') >= 0 ||
+    content.indexOf('return this.detectObjectFrame(input.bitmap, imageData)\n      }\n      return this.detectFullFrame') >= 0) {
+    return content
+  }
+
+  var legacyFullOnly = /    if \(!this\.performanceConfig\.staggerYoloAndFace && mode === 'auto'\) \{\r?\n      return this\.detectFullFrame\(input\.bitmap, imageData\)\r?\n    \}/
+  if (legacyFullOnly.test(content)) {
+    return content.replace(legacyFullOnly, bootFullDetectBlock)
+  }
+
+  return content
+}
+
 function patchYksAiProctorEngine(content) {
   content = content.replace(/import \* as tf from '@tensorflow\/tfjs'\r?\n/, '')
 
@@ -832,6 +855,7 @@ function patchYksAiProctorEngine(content) {
   content = patchYksAiProctorEngineBootstrap(content)
   content = patchYksAiProctorEngineSwitchModel(content)
   content = patchYksAiProctorEngineInitProctor(content)
+  content = patchYksAiProctorEngineDetectFrameBoot(content)
 
   if (content.indexOf('getDetectPhase():') < 0) {
     content = content.replace(

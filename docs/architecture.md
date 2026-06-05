@@ -80,7 +80,7 @@ sequenceDiagram
 - Worker URL → `chrome.runtime.getURL('worker.js')`
 - face-api URL → `chrome.runtime.getURL('models/face-api/')`
 - TensorFlow 后端：主线程与 Worker **仅 webgpu**（`EXT_TF_BACKEND` / `initWebGpuBackend`）；禁止 webgl
-- `EXT_PERFORMANCE`：`staggerYoloAndFace: true`，YOLO 每帧、face-api 降频
+- `EXT_PERFORMANCE`：`staggerYoloAndFace: false`，启动 15s 内仅 YOLO，之后每 tick 同帧跑 YOLO+face（`detect-full`）
 - 运行时通过 `src/ai/tfGlobal.ts` 的 `getTfGlobal()` 解析 `globalThis.tf`（避免 webpack `import * as tf` 拿不到 `setBackend`）
 
 aiIdentification 升级后需手动执行 `yarn sync-ai` 重新同步。
