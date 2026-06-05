@@ -20,14 +20,7 @@ module.exports = function(env, argv) {
       publicPath: '/'
     },
     resolve: {
-      extensions: ['.ts', '.js'],
-      alias: {
-        '@': path.resolve(__dirname, 'src/ai')
-      }
-    },
-    externals: {
-      '@tensorflow/tfjs': 'tf',
-      '@vladmandic/face-api': 'faceapi'
+      extensions: ['.ts', '.js']
     },
     module: {
       rules: [

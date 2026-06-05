@@ -6,9 +6,8 @@
     "node": "12.7.0"
   },
   "scripts": {
-    "sync-ai": "node scripts/sync-ai-engine.js",
     "copy-assets": "node scripts/copy-assets.js",
-    "prebuild": "yarn sync-ai && yarn copy-assets",
+    "prebuild": "yarn copy-assets",
     "build": "node scripts/run-webpack.js --mode production",
     "dev": "node scripts/run-webpack.js --mode development --watch"
   },

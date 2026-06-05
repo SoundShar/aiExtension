@@ -9,9 +9,6 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/ai/*"]
-    },
     "types": ["chrome"]
   },
   "include": ["src/**/*", "src/types/globals.d.ts"],

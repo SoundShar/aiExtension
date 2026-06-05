@@ -2,7 +2,9 @@
 
 ## 概述
 
-本扩展从目标网页抓取可见且面积最大的 `<canvas>`，每秒导出 JPEG 预览，并在 Offscreen Document 中运行 TensorFlow.js AI 推理（YOLO + face-api）。**TensorFlow 后端仅允许 WebGPU，禁止 WebGL 回退**，结果输出到 Popup 日志与控制台。
+本扩展从目标网页抓取 `<canvas>`，每秒导出 JPEG，在 Offscreen Document 中通过 **Recognition Worker**（`public/worker.js`）运行 YOLO + face-api 推理。**TensorFlow 仅在 Worker 内加载，后端仅 WebGPU**。结果输出到 Popup 日志与控制台。
+
+各文件职责、消息流转与实现细节见 **[recognition-implementation.md](./recognition-implementation.md)**。
 
 ## 环境要求
 
@@ -12,83 +14,69 @@
 
 ## 模块划分
 
-| 模块 | 文件 | 职责 |
+| 模块 | 路径 | 职责 |
 |------|------|------|
-| Content Script | `src/content/canvasCapture.ts` | 每秒 `toDataURL('image/jpeg')` 抓取第一个 canvas |
+| Content Script | `src/content/canvasCapture.ts` | 每秒抓取 canvas JPEG |
 | Service Worker | `src/background/serviceWorker.ts` | Offscreen 生命周期、消息路由、检测队列 |
-| Offscreen | `src/offscreen/offscreen.ts` | 加载 AI 引擎并执行 `detectFrame` |
-| Popup | `src/popup/popup.ts` | JPEG 预览、日志展示、开始/停止控制 |
-| AI 引擎 | `src/ai/` | 自 aiIdentification 同步的最小推理核心 |
+| Offscreen | `src/offscreen/offscreen.ts` | 帧队列、`RecognitionEngine` 调度 |
+| 识别引擎 | `src/recognition/` | Worker RPC、围栏、启动节奏（boot 15s / full） |
+| Worker | `public/worker.js` | YOLO + face-api 推理（唯一推理面） |
+| Popup | `src/popup/popup.ts` | 预览、日志、开始/停止 |
+
+## 识别调度
+
+| 时段 | 行为 |
+|------|------|
+| 启动后 0–15s | 每 tick `detect-object`（仅 YOLO 四项） |
+| 15s 之后 | 每 tick `detect-full`（YOLO + face 八项同帧） |
+
+Worker 初始化或推理失败时 **直接报错**（无主线程降级）。
 
 ## 消息协议
 
 | 消息类型 | 方向 | 说明 |
 |----------|------|------|
-| `START_SESSION` | Popup → SW | 启动当前 tab 分析 |
+| `START_SESSION` | Popup → SW | 启动分析 |
 | `STOP_SESSION` | Popup → SW | 停止分析 |
-| `START_CAPTURE` | SW → Content | 开始 1s 定时抓取 |
-| `STOP_CAPTURE` | SW → Content | 停止抓取 |
-| `CANVAS_FRAME` | Content → SW | JPEG 帧数据 |
-| `CAPTURE_ERROR` | Content → SW | 抓取错误 |
-| `FRAME_PREVIEW` | SW → Popup | 预览帧 |
-| `DETECT_FRAME` | SW → Offscreen | 送入 AI 检测 |
-| `DETECT_RESULT` | Offscreen → SW | 检测结果 |
-| `ANALYSIS_LOG` | SW → Popup | 格式化日志 |
-| `SET_MASTER_FACE` | Popup → SW → Offscreen | 设置换人基准人脸（覆盖内置 `image/123213123.png`） |
-| `SESSION_ERROR` | SW → Popup | 会话错误 |
-| `SESSION_STATE` | SW → Popup | 运行状态 |
+| `DETECT_FRAME` | SW → Offscreen | 送入 JPEG 检测 |
+| `DETECT_RESULT` | Offscreen → SW | 8 项布尔结果 |
+| `SET_MASTER_FACE` | Popup → SW → Offscreen | 换人基准人脸 |
 
-## 错误码
-
-| 代码 | 含义 |
-|------|------|
-| `NO_CANVAS` | 页面上未找到 canvas |
-| `TAINTED` | canvas 跨域污染，无法导出 |
-| `ZERO_SIZE` | canvas 宽高为 0 |
+完整列表见 `src/shared/messages.ts`。
 
 ## 检测队列
 
-Service Worker 维护 `isDetecting` 标志。若上一帧推理未完成，新帧写入 `pendingFrame`（仅保留最新），避免 `PROCTOR_WORKER_BUSY` 堆积。
+Service Worker 与 Offscreen 均只保留最新一帧，避免 Worker 忙时堆积。
 
-## Offscreen 初始化流程
+## 数据流
 
 ```mermaid
 sequenceDiagram
   participant Popup
   participant SW as ServiceWorker
-  participant CS as ContentScript
   participant OS as Offscreen
-  participant Engine as YksAiProctorEngine
+  participant Engine as RecognitionEngine
+  participant Worker as worker.js
 
   Popup->>SW: START_SESSION
   SW->>OS: createDocument
-  SW->>CS: inject + START_CAPTURE
-  CS->>SW: CANVAS_FRAME
-  SW->>Popup: FRAME_PREVIEW
   SW->>OS: DETECT_FRAME
-  OS->>Engine: bootstrapModels + initProctor
   OS->>Engine: detectFrame
+  Engine->>Worker: detect-object or detect-full
+  Worker-->>Engine: flags
+  Engine-->>OS: DetectFrameResult
   OS->>SW: DETECT_RESULT
   SW->>Popup: ANALYSIS_LOG
 ```
 
-## AI 源码同步
+## 静态资源
 
-`scripts/sync-ai-engine.js` 从 `d:\dev\aiIdentification\src` 复制 yolo 引擎与 proctor 辅助文件到 `src/ai/`，并 patch：
-
-- 模型 URL → `chrome.runtime.getURL('models/')`
-- Worker URL → `chrome.runtime.getURL('worker.js')`
-- face-api URL → `chrome.runtime.getURL('models/face-api/')`
-- TensorFlow 后端：主线程与 Worker **仅 webgpu**（`EXT_TF_BACKEND` / `initWebGpuBackend`）；禁止 webgl
-- `EXT_PERFORMANCE`：`staggerYoloAndFace: false`，启动 15s 内仅 YOLO，之后每 tick 同帧跑 YOLO+face（`detect-full`）
-- 运行时通过 `src/ai/tfGlobal.ts` 的 `getTfGlobal()` 解析 `globalThis.tf`（避免 webpack `import * as tf` 拿不到 `setBackend`）
-
-aiIdentification 升级后需手动执行 `yarn sync-ai` 重新同步。
+- `yarn copy-assets`：从 aiIdentification 复制 `models/`、`js/face-api.js`、`js/tf-csp-prelude.js`
+- `public/worker.js`：**扩展自有**，不从 aiIdentification 覆盖
+- `js/tf-webgpu-bundle.js`：webpack 打包产物，供 Worker `importScripts`
 
 ## 日志格式
 
 ```
-[canvas-ai][object] {"not_person":false,"has_phone":true,...}
+[canvas-ai][full] not_person=无人；has_phone=疑似手机
 ```
-
-告警项在 Popup 中以红色高亮，并显示中文标签。

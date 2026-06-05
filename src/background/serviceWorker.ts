@@ -11,7 +11,7 @@ import {
   type SessionErrorPayload,
   type SessionStatePayload
 } from '../shared/messages'
-import { EXT_PERFORMANCE } from '../ai/extensionModelConfig'
+import { RECOGNITION_CONFIG } from '../recognition/config'
 
 interface TabSession {
   tabId: number
@@ -25,7 +25,7 @@ var sessions = new Map<number, TabSession>()
 var offscreenReady = false
 var creatingOffscreen = false
 var detectTimeoutByTab = new Map<number, number>()
-var DETECT_FRAME_TIMEOUT_MS = (EXT_PERFORMANCE.detectFrameTimeoutMs || 15000) + 3000
+var DETECT_FRAME_TIMEOUT_MS = RECOGNITION_CONFIG.detectFrameTimeoutMs + 3000
 
 function getSession(tabId: number): TabSession {
   var existing = sessions.get(tabId)

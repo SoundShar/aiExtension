@@ -1,8 +1,5 @@
-import { CanvasProctorEngine } from '../ai/canvasProctorEngine'
-import { EXT_PERFORMANCE } from '../ai/extensionModelConfig'
-import { installExtensionGlobalFetch } from '../ai/extensionAssets'
-import { bindFaceApiToExtensionTf } from '../ai/faceApiGlobal'
-import { assertExtensionTfCoreReady, ensureExtensionTfReady } from '../ai/tfGlobal'
+import { RECOGNITION_CONFIG } from '../recognition/config'
+import { RecognitionEngine } from '../recognition/recognitionEngine'
 import {
   buildAnalysisLogText,
   hasAnyDetectionAlert,
@@ -12,12 +9,12 @@ import {
   type EngineStatusPayload
 } from '../shared/messages'
 
-var proctorEngine = new CanvasProctorEngine()
+var recognitionEngine = new RecognitionEngine()
 var latestPendingFrame: DetectFramePayload | null = null
 var isDrainRunning = false
 var modelsReady = false
 var modelsWarmupPromise: Promise<void> | null = null
-var DETECT_FRAME_TIMEOUT_MS = EXT_PERFORMANCE.detectFrameTimeoutMs || 12000
+var DETECT_FRAME_TIMEOUT_MS = RECOGNITION_CONFIG.detectFrameTimeoutMs
 
 var emptyDetectFlags: DetectResultPayload['flags'] = {
   not_person: false,
@@ -93,7 +90,7 @@ async function runDetectFrameCore(
   abortToken: { superseded: boolean }
 ): Promise<void> {
   var startedAt = Date.now()
-  var detectResult = await proctorEngine.detectFrame(
+  var detectResult = await recognitionEngine.detectFrame(
     message.jpeg,
     message.width,
     message.height
@@ -116,7 +113,7 @@ async function runDetectFrameCore(
 }
 
 async function runDetectFrameWithTimeout(message: DetectFramePayload): Promise<void> {
-  var phaseHint = proctorEngine.getUpcomingDetectPhase()
+  var phaseHint = recognitionEngine.getUpcomingDetectPhase()
   console.info(
     '[canvas-ai][offscreen] 开始检测 tabId=' + message.tabId + ' phase=' + phaseHint
   )
@@ -197,7 +194,7 @@ function ensureModelsReady(): Promise<void> {
     return modelsWarmupPromise
   }
 
-  modelsWarmupPromise = proctorEngine.warmupModels().then(function() {
+  modelsWarmupPromise = recognitionEngine.warmupModels().then(function() {
     modelsReady = true
     sendEngineStatus(true, 'AI 模型已预加载')
   }).catch(function(error) {
@@ -223,7 +220,7 @@ chrome.runtime.onMessage.addListener(function(message, _sender, sendResponse) {
   }
 
   if (message.type === MSG.SET_MASTER_FACE && message.jpeg) {
-    proctorEngine.setMasterFace(message.jpeg).then(function(result) {
+    recognitionEngine.setMasterFace(message.jpeg).then(function(result) {
       sendEngineStatus(result.success, result.message)
       sendResponse({ success: result.success, message: result.message })
     }).catch(function(error) {
@@ -237,18 +234,10 @@ chrome.runtime.onMessage.addListener(function(message, _sender, sendResponse) {
   return false
 })
 
-try {
-  installExtensionGlobalFetch()
-  assertExtensionTfCoreReady()
-  ensureExtensionTfReady()
-  bindFaceApiToExtensionTf()
-  console.info('[canvas-ai][offscreen] TensorFlow 与扩展 fetch 已就绪')
-  ensureModelsReady().catch(function() {
-    // 预加载失败时首帧会再次尝试并输出错误
-  })
-} catch (error) {
-  console.error('[canvas-ai][offscreen] TensorFlow 预初始化失败', error)
-}
+console.info('[canvas-ai][offscreen] Recognition Worker 模式已就绪')
+ensureModelsReady().catch(function() {
+  // 预加载失败时首帧会再次尝试并输出错误
+})
 
 sendEngineStatus(false, 'Offscreen 文档已加载，正在预加载模型…')
 
